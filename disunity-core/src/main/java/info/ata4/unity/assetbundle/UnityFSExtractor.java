@@ -2,6 +2,7 @@ package info.ata4.unity.assetbundle;
 
 import info.ata4.io.DataReader;
 import info.ata4.io.DataReaders;
+import info.ata4.unity.assetbundle.AssetBundleException;
 import info.ata4.util.progress.Progress;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -215,9 +216,7 @@ public class UnityFSExtractor {
         byte[] restored = new byte[uncompressedSize];
         int restoredLength = decompressor.decompress(data, 0, data.length, restored, 0, uncompressedSize);
         if (restoredLength != uncompressedSize) {
-            byte[] exact = new byte[restoredLength];
-            System.arraycopy(restored, 0, exact, 0, restoredLength);
-            return exact;
+            throw new IOException("LZ4 decompression failed: expected " + uncompressedSize + " bytes, got " + restoredLength);
         }
         return restored;
     }

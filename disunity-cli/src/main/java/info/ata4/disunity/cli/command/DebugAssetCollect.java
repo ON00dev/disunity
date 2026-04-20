@@ -26,7 +26,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.xml.bind.DatatypeConverter;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.output.NullOutputStream;
 
@@ -43,6 +42,7 @@ import org.apache.commons.io.output.NullOutputStream;
 public class DebugAssetCollect extends BundleFileCommand {
     
     private static final Logger L = LogUtils.getLogger();
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
     
     @Parameter(
         names = {"-o", "--output"},
@@ -83,6 +83,13 @@ public class DebugAssetCollect extends BundleFileCommand {
         }
 
         byte[] digest = md.digest();
-        return DatatypeConverter.printHexBinary(digest);
+        char[] out = new char[digest.length * 2];
+        for (int i = 0; i < digest.length; i++) {
+            int b = digest[i] & 0xFF;
+            int j = i * 2;
+            out[j] = HEX[b >>> 4];
+            out[j + 1] = HEX[b & 0x0F];
+        }
+        return new String(out);
     }
 }

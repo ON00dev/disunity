@@ -15,7 +15,6 @@ import info.ata4.io.DataWriter;
 import info.ata4.io.DataWriters;
 import java.io.IOException;
 import java.nio.channels.SeekableByteChannel;
-import javax.xml.bind.DatatypeConverter;
 
 /**
  * Codec for Xianjian asset bundles where some bytes are XOR'd with a fixed key.
@@ -24,7 +23,7 @@ import javax.xml.bind.DatatypeConverter;
  */
 public class XianjianCodec implements AssetBundleCodec {
     
-    private static final byte[] KEY = DatatypeConverter.parseHexBinary("56F45921699978FC92B3");
+    private static final byte[] KEY = parseHexBinary("56F45921699978FC92B3");
     
     @Override
     public String getName() {
@@ -66,6 +65,23 @@ public class XianjianCodec implements AssetBundleCodec {
     @Override
     public void decode(SeekableByteChannel chan) throws IOException {
         code(chan);
+    }
+    
+    private static byte[] parseHexBinary(String s) {
+        int len = s.length();
+        if ((len & 1) != 0) {
+            throw new IllegalArgumentException("Hex string must have even length");
+        }
+        byte[] out = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            int hi = Character.digit(s.charAt(i), 16);
+            int lo = Character.digit(s.charAt(i + 1), 16);
+            if (hi < 0 || lo < 0) {
+                throw new IllegalArgumentException("Invalid hex character");
+            }
+            out[i / 2] = (byte) ((hi << 4) | lo);
+        }
+        return out;
     }
     
 }

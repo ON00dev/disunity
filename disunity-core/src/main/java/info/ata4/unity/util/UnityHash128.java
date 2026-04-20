@@ -13,7 +13,6 @@ import info.ata4.io.DataReader;
 import info.ata4.io.DataWriter;
 import info.ata4.unity.asset.VersionInfo;
 import java.io.IOException;
-import javax.xml.bind.DatatypeConverter;
 
 /**
  *
@@ -22,6 +21,7 @@ import javax.xml.bind.DatatypeConverter;
 public class UnityHash128 extends UnityStruct {
     
     private final byte[] hash = new byte[16];
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
 
     public UnityHash128(VersionInfo versionInfo) {
         super(versionInfo);
@@ -43,6 +43,13 @@ public class UnityHash128 extends UnityStruct {
 
     @Override
     public String toString() {
-        return DatatypeConverter.printHexBinary(hash);
+        char[] out = new char[hash.length * 2];
+        for (int i = 0; i < hash.length; i++) {
+            int b = hash[i] & 0xFF;
+            int j = i * 2;
+            out[j] = HEX[b >>> 4];
+            out[j + 1] = HEX[b & 0x0F];
+        }
+        return new String(out);
     }
 }
