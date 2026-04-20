@@ -6,7 +6,7 @@ An experimental command-line toolset for Unity asset and asset bundle files, mos
 Download
 --------
 
-The latest build can be found on the [releases page](https://github.com/ata4/disunity/releases).
+The latest build can be found on the [releases page](https://github.com/on00dev/disunity/releases).
 
 Usage
 -----
