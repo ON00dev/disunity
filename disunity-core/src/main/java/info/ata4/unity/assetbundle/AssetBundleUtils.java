@@ -57,8 +57,11 @@ public class AssetBundleUtils {
             byte[] header = new byte[8];
             is.read(header);
             String headerString = new String(header, PROP_CHARSET);
-            return headerString.equals(AssetBundleHeader.SIGNATURE_WEB)
-                    || headerString.equals(AssetBundleHeader.SIGNATURE_RAW);
+            if (headerString.startsWith(AssetBundleHeader.SIGNATURE_WEB)
+                    || headerString.startsWith(AssetBundleHeader.SIGNATURE_RAW)) {
+                return true;
+            }
+            return headerString.startsWith(UnityFSExtractor.SIGNATURE_FS);
         } catch (IOException ex) {
         }
         
@@ -66,32 +69,11 @@ public class AssetBundleUtils {
     }
     
     public static void extract(Path file, Path outDir, Progress progress) throws IOException {
-        try(
-            AssetBundleReader assetBundle = new AssetBundleReader(file)
-        ) {
-            List<AssetBundleEntry> entries = assetBundle.entries();
-            progress.setLimit(entries.size());
-
-            for (int i = 0; i < entries.size(); i++) {
-                if (progress.isCanceled()) {
-                    break;
-                }
-                
-                AssetBundleEntry entry = entries.get(i);
-                progress.setLabel(entry.name());
-                
-                Path entryFile = outDir.resolve(entry.name());
-                Files.createDirectories(entryFile.getParent());
-                Files.copy(entry.inputStream(), entryFile, REPLACE_EXISTING);
-                
-                progress.update(i + 1);
-            }
-            
-            String bundleName = outDir.getFileName().toString();
-            Path propsFile = outDir.getParent().resolve(bundleName + ".json");
-            
-            writePropertiesFile(propsFile, assetBundle);
+        if (UnityFSExtractor.isUnityFS(file)) {
+            UnityFSExtractor.extract(file, outDir, progress);
+            return;
         }
+        extractLegacy(file, outDir, progress);
     }
     
     public static void extract(Path file, Path outDir) throws IOException {
@@ -173,6 +155,33 @@ public class AssetBundleUtils {
             String name = files.getString(i);
             Path file = bundleDir.resolve(name);
             assetBundle.addEntry(new AssetBundleExternalEntry(name, file));
+        }
+    }
+
+    private static void extractLegacy(Path file, Path outDir, Progress progress) throws IOException {
+        try (AssetBundleReader assetBundle = new AssetBundleReader(file)) {
+            List<AssetBundleEntry> entries = assetBundle.entries();
+            progress.setLimit(entries.size());
+
+            for (int i = 0; i < entries.size(); i++) {
+                if (progress.isCanceled()) {
+                    break;
+                }
+
+                AssetBundleEntry entry = entries.get(i);
+                progress.setLabel(entry.name());
+
+                Path entryFile = outDir.resolve(entry.name());
+                Files.createDirectories(entryFile.getParent());
+                Files.copy(entry.inputStream(), entryFile, REPLACE_EXISTING);
+
+                progress.update(i + 1);
+            }
+
+            String bundleName = outDir.getFileName().toString();
+            Path propsFile = outDir.getParent().resolve(bundleName + ".json");
+
+            writePropertiesFile(propsFile, assetBundle);
         }
     }
 }
