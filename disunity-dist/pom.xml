@@ -67,8 +67,7 @@
                             <descriptors>
                                 <descriptor>src/assembly/portable.xml</descriptor>
                             </descriptors>
-                            <finalName>disunity-portable-${project.version}</finalName>
-                            <appendAssemblyId>false</appendAssemblyId>
+                            <finalName>disunity-${project.version}</finalName>
                         </configuration>
                     </execution>
                 </executions>
