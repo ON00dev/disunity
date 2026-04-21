@@ -46,7 +46,7 @@ public class UnityFSExtractor {
         }
 
         try (InputStream is = Files.newInputStream(file)) {
-            int maxScan = 1024 * 1024;
+            int maxScan = 16 * 1024 * 1024;
             byte[] buf = new byte[64 * 1024];
             byte[] tail = new byte[SIGNATURE_BYTES.length - 1];
             int tailLen = 0;
@@ -70,6 +70,73 @@ public class UnityFSExtractor {
             return false;
         } catch (IOException ex) {
             return false;
+        }
+    }
+
+    public static UnityFSBundleInfo getBundleInfo(Path file) throws IOException {
+        long fileSize = Files.size(file);
+        try (DataReader in = DataReaders.forFile(file, READ)) {
+            long baseOffset = findUnityFSBaseOffset(in, fileSize);
+            in.position(baseOffset);
+            UnityFSHeader header = readHeader(in);
+            long bundleEnd = baseOffset + header.size;
+            int alignTo = alignment(header.version, header.flags);
+
+            long blocksInfoOffset = -1;
+            BlocksInfo blocksInfo = null;
+            List<Long> candidateOffsets = getBlocksInfoCandidateOffsets(header, bundleEnd, alignTo);
+            for (Long candidateOffset : candidateOffsets) {
+                if (candidateOffset < 0 || candidateOffset + header.compressedBlocksInfoSize > fileSize) {
+                    continue;
+                }
+                in.position(candidateOffset);
+                byte[] blocksInfoCompressed = new byte[(int) header.compressedBlocksInfoSize];
+                in.readBytes(blocksInfoCompressed);
+
+                byte[] blocksInfoData = tryDecompressBlocksInfo(blocksInfoCompressed, header);
+                if (blocksInfoData == null) {
+                    continue;
+                }
+
+                try {
+                    blocksInfo = readBlocksInfo(blocksInfoData);
+                    blocksInfoOffset = candidateOffset;
+                    break;
+                } catch (Exception ex) {
+                }
+            }
+
+            if (blocksInfo == null) {
+                throw new IOException("Failed to locate/decompress UnityFS BlocksInfo");
+            }
+
+            long dataOffset = findDataOffset(in, fileSize, blocksInfoOffset, header, blocksInfo, alignTo);
+
+            UnityFSBundleInfo info = new UnityFSBundleInfo();
+            info.baseOffset = baseOffset;
+            info.version = header.version;
+            info.unityVersion = header.unityVersion;
+            info.unityRevision = header.unityRevision;
+            info.size = header.size;
+            info.flags = header.flags;
+            info.compressedBlocksInfoSize = header.compressedBlocksInfoSize;
+            info.uncompressedBlocksInfoSize = header.uncompressedBlocksInfoSize;
+            info.blocksInfoOffset = blocksInfoOffset;
+            info.dataOffset = dataOffset;
+            info.blockCount = blocksInfo.blocks.size();
+            info.nodeCount = blocksInfo.nodes.size();
+
+            info.nodes = new ArrayList<NodeEntry>(blocksInfo.nodes.size());
+            for (NodeInfo node : blocksInfo.nodes) {
+                NodeEntry entry = new NodeEntry();
+                entry.path = node.path;
+                entry.offset = node.offset;
+                entry.size = node.size;
+                entry.flags = node.flags;
+                info.nodes.add(entry);
+            }
+
+            return info;
         }
     }
     
@@ -544,6 +611,31 @@ public class UnityFSExtractor {
         try (InputStream data = new ByteArrayInputStream(output.toByteArray())) {
             Files.copy(data, entryFile, REPLACE_EXISTING);
         }
+    }
+
+    public static class UnityFSBundleInfo {
+
+        public long baseOffset;
+        public int version;
+        public String unityVersion;
+        public String unityRevision;
+        public long size;
+        public int flags;
+        public long compressedBlocksInfoSize;
+        public long uncompressedBlocksInfoSize;
+        public long blocksInfoOffset;
+        public long dataOffset;
+        public int blockCount;
+        public int nodeCount;
+        public List<NodeEntry> nodes;
+    }
+
+    public static class NodeEntry {
+
+        public String path;
+        public long offset;
+        public long size;
+        public int flags;
     }
 
     private static class UnityFSHeader {

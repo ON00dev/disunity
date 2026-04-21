@@ -174,14 +174,18 @@ public class Type extends UnityStruct {
     @Override
     public void read(DataReader in) throws IOException {
         if (versionInfo.assetVersion() > 13) {
-            version = in.readShort();
+            version = in.readUnsignedShort();
             treeLevel = in.readUnsignedByte();
-            isArray = in.readBoolean();
+            int typeFlags = in.readUnsignedByte();
+            isArray = (typeFlags & 1) != 0;
             typeOffset = in.readInt();
             nameOffset = in.readInt();
             size = in.readInt();
             index = in.readInt();
             metaFlag = in.readInt();
+            if (versionInfo.assetVersion() >= 19) {
+                in.readLong();
+            }
         } else {
             type = in.readStringNull(256);
             name = in.readStringNull(256);

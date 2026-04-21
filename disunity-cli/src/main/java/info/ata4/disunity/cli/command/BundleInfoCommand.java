@@ -14,6 +14,7 @@ import info.ata4.disunity.cli.util.TablePrinter;
 import info.ata4.unity.assetbundle.AssetBundleEntryInfo;
 import info.ata4.unity.assetbundle.AssetBundleHeader;
 import info.ata4.unity.assetbundle.AssetBundleReader;
+import info.ata4.unity.assetbundle.UnityFSExtractor;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.List;
@@ -31,6 +32,22 @@ import org.json.JSONObject2;
     commandDescription = "Prints info for asset bundle files."
 )
 public class BundleInfoCommand extends BundleFileCommand {
+
+    @Override
+    public void handleFile(java.nio.file.Path file) throws IOException {
+        if (UnityFSExtractor.isUnityFS(file)) {
+            UnityFSExtractor.UnityFSBundleInfo info = UnityFSExtractor.getBundleInfo(file);
+            switch (getOptions().getOutputFormat()) {
+                case JSON:
+                    printJSON(info);
+                    break;
+                default:
+                    printText(info);
+            }
+            return;
+        }
+        super.handleFile(file);
+    }
 
     @Override
     public void handleBundleFile(AssetBundleReader reader) throws IOException {
@@ -91,6 +108,40 @@ public class BundleInfoCommand extends BundleFileCommand {
         
         tbl.print(out);
     }
+
+    private void printText(UnityFSExtractor.UnityFSBundleInfo info) {
+        PrintWriter out = getOutputWriter();
+        out.println("Header:");
+
+        TablePrinter tbl = new TablePrinter(2);
+        tbl.addRow("Field", "Value");
+        tbl.addRow("signature", UnityFSExtractor.SIGNATURE_FS);
+        tbl.addRow("version", info.version);
+        tbl.addRow("unityVersion", info.unityVersion);
+        tbl.addRow("unityRevision", info.unityRevision);
+        tbl.addRow("size", info.size);
+        tbl.addRow("flags", "0x" + Integer.toHexString(info.flags));
+        tbl.addRow("baseOffset", info.baseOffset);
+        tbl.addRow("blocksInfoOffset", info.blocksInfoOffset);
+        tbl.addRow("dataOffset", info.dataOffset);
+        tbl.addRow("compressedBlocksInfoSize", info.compressedBlocksInfoSize);
+        tbl.addRow("uncompressedBlocksInfoSize", info.uncompressedBlocksInfoSize);
+        tbl.addRow("blockCount", info.blockCount);
+        tbl.addRow("nodeCount", info.nodeCount);
+        tbl.print(out);
+
+        out.println();
+        out.println("Entries:");
+
+        tbl = new TablePrinter(3);
+        tbl.setColumnAlignment(1, 1);
+        tbl.setColumnAlignment(2, 1);
+        tbl.addRow("Name", "Offset", "Size");
+        for (UnityFSExtractor.NodeEntry entry : info.nodes) {
+            tbl.addRow(entry.path, entry.offset, entry.size);
+        }
+        tbl.print(out);
+    }
     
     private void printJSON(AssetBundleReader reader) {
         AssetBundleHeader header = reader.header();
@@ -144,6 +195,37 @@ public class BundleInfoCommand extends BundleFileCommand {
         
         root.put("entries", entryInfosJson);
         
+        root.write(getOutputWriter(), 2);
+    }
+
+    private void printJSON(UnityFSExtractor.UnityFSBundleInfo info) {
+        JSONObject2 root = new JSONObject2();
+        root.put("file", getCurrentFile());
+
+        root.put("signature", UnityFSExtractor.SIGNATURE_FS);
+        root.put("version", info.version);
+        root.put("unityVersion", info.unityVersion);
+        root.put("unityRevision", info.unityRevision);
+        root.put("size", info.size);
+        root.put("flags", info.flags);
+        root.put("baseOffset", info.baseOffset);
+        root.put("blocksInfoOffset", info.blocksInfoOffset);
+        root.put("dataOffset", info.dataOffset);
+        root.put("compressedBlocksInfoSize", info.compressedBlocksInfoSize);
+        root.put("uncompressedBlocksInfoSize", info.uncompressedBlocksInfoSize);
+        root.put("blockCount", info.blockCount);
+        root.put("nodeCount", info.nodeCount);
+
+        JSONArray entryInfosJson = new JSONArray();
+        for (UnityFSExtractor.NodeEntry entry : info.nodes) {
+            JSONObject entryInfoJson = new JSONObject();
+            entryInfoJson.put("name", entry.path);
+            entryInfoJson.put("offset", entry.offset);
+            entryInfoJson.put("length", entry.size);
+            entryInfosJson.put(entryInfoJson);
+        }
+        root.put("entries", entryInfosJson);
+
         root.write(getOutputWriter(), 2);
     }
 }

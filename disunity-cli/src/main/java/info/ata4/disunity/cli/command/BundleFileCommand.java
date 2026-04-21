@@ -12,6 +12,7 @@ package info.ata4.disunity.cli.command;
 import info.ata4.log.LogUtils;
 import info.ata4.unity.assetbundle.AssetBundleReader;
 import info.ata4.unity.assetbundle.AssetBundleUtils;
+import info.ata4.unity.assetbundle.UnityFSExtractor;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.logging.Level;
@@ -30,6 +31,10 @@ public abstract class BundleFileCommand extends MultiFileCommand {
         if (!AssetBundleUtils.isAssetBundle(file)) {
             L.log(Level.SEVERE, "{0} is not an asset bundle file", file);
         } else {
+            if (UnityFSExtractor.isUnityFS(file)) {
+                L.log(Level.SEVERE, "{0} is a UnityFS bundle and is not supported by this command", file);
+                return;
+            }
             try (AssetBundleReader reader = new AssetBundleReader(file)) {
                 handleBundleFile(reader);
             }

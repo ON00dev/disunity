@@ -19,6 +19,7 @@ import info.ata4.unity.rtti.ObjectData;
 import info.ata4.unity.rtti.ObjectSerializer;
 import info.ata4.unity.util.TypeTreeUtils;
 import info.ata4.util.io.DataBlock;
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -123,19 +124,218 @@ public class AssetFile extends FileHandler {
       
     @Override
     public void load(DataReader in) throws IOException {
-        loadHeader(in);
+        try {
+            loadHeader(in);
 
-        // read as little endian from now on
-        in.order(ByteOrder.LITTLE_ENDIAN);
-        
-        // older formats store the object data before the structure data
-        if (header.version() < 9) {
-            in.position(header.fileSize() - header.metadataSize() + 1);
+            if (header.version() >= 9) {
+                in.order(header.endianness() == 0 ? ByteOrder.LITTLE_ENDIAN : ByteOrder.BIG_ENDIAN);
+            } else {
+                long metadataStart = header.fileSize() - header.metadataSize();
+                in.position(metadataStart);
+                byte e = in.readByte();
+                in.order(e == 0 ? ByteOrder.LITTLE_ENDIAN : ByteOrder.BIG_ENDIAN);
+            }
+
+            if (header.version() >= 10) {
+                loadMetadataModern(in);
+            } else {
+                // older formats store the object data before the structure data
+                if (header.version() < 9) {
+                    in.position(header.fileSize() - header.metadataSize() + 1);
+                }
+                loadMetadata(in);
+            }
+            loadObjects(in);
+        } catch (EOFException ex) {
+            throw new IOException("Unexpected end of file while parsing asset file (format version " + versionInfo.assetVersion() + ")", ex);
         }
-        
-        loadMetadata(in);
-        loadObjects(in);
-        checkBlocks();
+    }
+    
+    private void loadMetadataModern(DataReader in) throws IOException {
+        long metadataStart = in.position();
+
+        if (header.version() >= 7) {
+            String unityVersion = in.readStringNull();
+            try {
+                versionInfo.unityRevision(new info.ata4.unity.util.UnityVersion(unityVersion));
+            } catch (Exception ex) {
+            }
+        }
+
+        if (header.version() >= 8) {
+            in.readInt();
+        }
+
+        boolean enableTypeTree = true;
+        if (header.version() >= 13) {
+            enableTypeTree = in.readBoolean();
+        }
+
+        typeTreeBlock.markBegin(in);
+        int typeCount = in.readInt();
+        List<Integer> classIDs = new ArrayList<Integer>(typeCount);
+
+        TypeNodeReader nodeReader = new TypeNodeReader(versionInfo);
+        for (int i = 0; i < typeCount; i++) {
+            int classID = in.readInt();
+            classIDs.add(classID);
+
+            if (header.version() >= 16) {
+                in.readBoolean();
+            }
+
+            if (header.version() >= 17) {
+                in.readShort();
+            }
+
+            if (header.version() >= 13) {
+                boolean readScriptID = (header.version() < 16 && classID < 0) || (header.version() >= 16 && classID == 114);
+                if (readScriptID) {
+                    in.readBytes(new byte[16]);
+                }
+                in.readBytes(new byte[16]);
+            }
+
+            BaseClass bc = new BaseClass();
+            bc.classID(classID);
+
+            if (enableTypeTree) {
+                TypeNode node = new TypeNode();
+                nodeReader.read(in, node);
+                bc.typeTree(node);
+            }
+
+            typeTreeMap.put(classID, bc);
+
+            if (header.version() >= 21) {
+                int depCount = in.readInt();
+                for (int d = 0; d < depCount; d++) {
+                    in.readInt();
+                }
+            }
+        }
+        typeTreeBlock.markEnd(in);
+        L.log(Level.FINER, "typeTreeBlock: {0}", typeTreeBlock);
+
+        if (header.version() >= 7 && header.version() < 14) {
+            in.readInt();
+        }
+
+        objectInfoBlock.markBegin(in);
+        int objectCount = in.readInt();
+        for (int i = 0; i < objectCount; i++) {
+            long pathID;
+            if (header.version() >= 7 && header.version() < 14) {
+                pathID = in.readInt();
+            } else {
+                in.align(4);
+                pathID = in.readLong();
+            }
+
+            long byteStart;
+            if (header.version() >= 22) {
+                byteStart = in.readLong();
+            } else {
+                byteStart = in.readUnsignedInt();
+            }
+
+            byteStart += header.dataOffset();
+            long byteSize = in.readUnsignedInt();
+            int typeID = in.readInt();
+
+            int classID;
+            if (header.version() < 16) {
+                classID = in.readUnsignedShort();
+            } else {
+                classID = classIDs.get(typeID);
+            }
+
+            if (header.version() < 11) {
+                in.readUnsignedShort();
+            }
+
+            if (header.version() >= 11 && header.version() < 17) {
+                in.readShort();
+            }
+
+            if (header.version() == 15 || header.version() == 16) {
+                in.readByte();
+            }
+
+            ObjectInfo info = new ObjectInfo(versionInfo);
+            info.offset(byteStart - header.dataOffset());
+            info.length(byteSize);
+            info.typeID(typeID);
+            info.classID(classID);
+            objectInfoMap.put(pathID, info);
+        }
+        objectInfoBlock.markEnd(in);
+        L.log(Level.FINER, "objectInfoBlock: {0}", objectInfoBlock);
+
+        if (header.version() >= 11) {
+            int scriptCount = in.readInt();
+            for (int i = 0; i < scriptCount; i++) {
+                in.readInt();
+                if (header.version() < 14) {
+                    in.readInt();
+                } else {
+                    in.align(4);
+                    in.readLong();
+                }
+            }
+        }
+
+        externalsBlock.markBegin(in);
+        int externalsCount = in.readInt();
+        for (int i = 0; i < externalsCount; i++) {
+            if (header.version() >= 6) {
+                in.readStringNull();
+            }
+            if (header.version() >= 5) {
+                in.readBytes(new byte[16]);
+                in.readInt();
+            }
+            in.readStringNull();
+        }
+
+        if (header.version() >= 20) {
+            int refTypesCount = in.readInt();
+            for (int i = 0; i < refTypesCount; i++) {
+                in.readInt();
+                if (header.version() >= 16) {
+                    in.readBoolean();
+                }
+                if (header.version() >= 17) {
+                    in.readShort();
+                }
+                if (header.version() >= 13) {
+                    in.readBytes(new byte[16]);
+                    in.readBytes(new byte[16]);
+                }
+                if (enableTypeTree) {
+                    TypeNode node = new TypeNode();
+                    nodeReader.read(in, node);
+                }
+                if (header.version() >= 21) {
+                    in.readStringNull();
+                    in.readStringNull();
+                    in.readStringNull();
+                }
+            }
+        }
+
+        if (header.version() >= 5) {
+            in.readStringNull();
+        }
+
+        externalsBlock.markEnd(in);
+        L.log(Level.FINER, "externalsBlock: {0}", externalsBlock);
+
+        long metadataEnd = in.position();
+        if (metadataEnd - metadataStart != header.metadataSize()) {
+            L.log(Level.FINE, "Metadata size mismatch (header: {0}, parsed: {1})",
+                    new Object[]{header.metadataSize(), metadataEnd - metadataStart});
+        }
     }
     
     public void loadExternals() throws IOException {
@@ -232,7 +432,8 @@ public class AssetFile extends FileHandler {
             
             TypeNode typeNode = null;
             
-            BaseClass typeClass = typeTreeMap.get(info.typeID());
+            int typeKey = header.version() >= 16 ? info.classID() : info.typeID();
+            BaseClass typeClass = typeTreeMap.get(typeKey);
             if (typeClass != null) {
                 typeNode = typeClass.typeTree();
             }

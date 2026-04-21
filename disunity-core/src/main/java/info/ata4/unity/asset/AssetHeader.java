@@ -35,6 +35,8 @@ public class AssetHeader extends UnityStruct {
     
     // unused
     private final byte[] reserved = new byte[3];
+    
+    private long unknownLargeFiles;
 
     public AssetHeader(VersionInfo versionInfo) {
         super(versionInfo);
@@ -42,13 +44,19 @@ public class AssetHeader extends UnityStruct {
 
     @Override
     public void read(DataReader in) throws IOException {
-        metadataSize = in.readInt();
+        metadataSize = in.readUnsignedInt();
         fileSize = in.readUnsignedInt();
-        versionInfo.assetVersion(in.readInt());
+        versionInfo.assetVersion((int) in.readUnsignedInt());
         dataOffset = in.readUnsignedInt();
         if (versionInfo.assetVersion() >= 9) {
             endianness = in.readByte();
             in.readBytes(reserved);
+        }
+        if (versionInfo.assetVersion() >= 22) {
+            metadataSize = in.readUnsignedInt();
+            fileSize = in.readLong();
+            dataOffset = in.readLong();
+            unknownLargeFiles = in.readLong();
         }
     }
 
@@ -56,11 +64,17 @@ public class AssetHeader extends UnityStruct {
     public void write(DataWriter out) throws IOException {
         out.writeUnsignedInt(metadataSize);
         out.writeUnsignedInt(fileSize);
-        out.writeInt(versionInfo.assetVersion());
+        out.writeUnsignedInt(versionInfo.assetVersion());
         out.writeUnsignedInt(dataOffset);
         if (versionInfo.assetVersion() >= 9) {
             out.writeByte(endianness);
             out.writeBytes(reserved);
+        }
+        if (versionInfo.assetVersion() >= 22) {
+            out.writeUnsignedInt(metadataSize);
+            out.writeLong(fileSize);
+            out.writeLong(dataOffset);
+            out.writeLong(unknownLargeFiles);
         }
     }
 
