@@ -35,7 +35,7 @@ public class UnityFSExtractor {
     private static final int COMPRESSION_LZ4HC = 3;
 
     private static final int BLOCK_FLAG_MASK = 0x3F;
-    private static final byte[] SIGNATURE_BYTES = new byte[]{'U', 'n', 'i', 't', 'y', 'F', 'S', 0};
+    private static final byte[] SIGNATURE_BYTES = new byte[]{'U', 'n', 'i', 't', 'y', 'F', 'S'};
 
     private UnityFSExtractor() {
     }
@@ -184,6 +184,9 @@ public class UnityFSExtractor {
     }
     
     private static byte[] tryDecompressBlocksInfo(byte[] data, UnityFSHeader header) {
+        if (data == null) {
+            return null;
+        }
         int compression = header.flags & COMPRESSION_MASK;
         int[] candidates;
         if (compression == COMPRESSION_LZMA) {
@@ -231,10 +234,10 @@ public class UnityFSExtractor {
     }
     
     private static boolean matchesUnityFSSignature(byte[] sig) {
-        if (sig.length < 7) {
+        if (sig == null || sig.length < SIGNATURE_BYTES.length) {
             return false;
         }
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < SIGNATURE_BYTES.length; i++) {
             if (sig[i] != SIGNATURE_BYTES[i]) {
                 return false;
             }
