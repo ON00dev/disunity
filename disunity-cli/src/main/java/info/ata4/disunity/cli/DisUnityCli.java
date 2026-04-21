@@ -23,6 +23,7 @@ import info.ata4.disunity.cli.command.ExtractCommand;
 import info.ata4.disunity.cli.command.InfoCommand;
 import info.ata4.disunity.cli.command.LearnCommand;
 import info.ata4.disunity.cli.command.ListCommand;
+import info.ata4.disunity.cli.command.LuaExtractCommand;
 import info.ata4.log.LogUtils;
 import info.ata4.unity.DisUnity;
 import java.io.PrintWriter;
@@ -54,6 +55,7 @@ public class DisUnityCli implements Runnable {
 //        jc.addCommand(new ExtractRawCmd());
 //        jc.addCommand(new ExtractTxtCmd());
 //        jc.addCommand(new ExtractStructCmd());
+        jc.addCommand(new LuaExtractCommand());
         jc.addCommand(new InfoCommand());
 //        jc.addCommand(new StatsCmd(out));
         jc.addCommand(new LearnCommand());

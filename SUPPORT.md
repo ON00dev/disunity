@@ -14,6 +14,14 @@ A list of features and Unity versions that are currently supported by DisUnity.
 * 4.2
 * 4.3
 * 5+
+* 2021.3.34f1c1 (SerializedFile v22 / LargeFilesSupport)
+
+### Asset bundles
+
+Format              | Status
+------------------- | -----------------------------------------------------------
+UnityWeb/UnityRaw   | Ok (legacy Unity 2.x–4.x style bundles)
+UnityFS (Unity 5+)  | Ok for extraction and bundle-info/bundle-list (LZ4/LZMA). Encrypted/obfuscated bundles are not supported.
 
 ### Asset extraction
 
@@ -28,3 +36,9 @@ Texture2D           | Missing support for some exotic compression formats, no un
 Cubemap             | Ok
 SubstanceArchive    | Ok
 MovieTexture        | Ok
+
+### Lua extraction
+
+Feature             | Status
+------------------- | -----------------------------------------------------------
+Search + extract Lua scripts from TextAssets by content (lua-extract) | Ok
