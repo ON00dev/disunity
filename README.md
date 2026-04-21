@@ -72,7 +72,7 @@ Extract all packed files from two bundle files:
 
 Extract files from a UnityFS bundle:
 
-    disunity bundle-extract a74cc6acee889971e67a7f7dc5fc71ef.bundle
+    disunity bundle-extract xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.bundle
 
 Find and extract Lua scripts containing a signature (string search):
 
