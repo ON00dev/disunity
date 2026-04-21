@@ -61,7 +61,10 @@ public class AssetBundleUtils {
                     || headerString.startsWith(AssetBundleHeader.SIGNATURE_RAW)) {
                 return true;
             }
-            return headerString.startsWith(UnityFSExtractor.SIGNATURE_FS);
+            if (headerString.startsWith(UnityFSExtractor.SIGNATURE_FS)) {
+                return true;
+            }
+            return UnityFSExtractor.isUnityFS(file);
         } catch (IOException ex) {
         }
         

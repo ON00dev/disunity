@@ -46,15 +46,59 @@ public class UnityFSExtractor {
         }
 
         try (InputStream is = Files.newInputStream(file)) {
-            byte[] header = new byte[7];
-            int read = is.read(header);
-            if (read != header.length) {
-                return false;
+            int maxScan = 1024 * 1024;
+            byte[] buf = new byte[64 * 1024];
+            byte[] tail = new byte[SIGNATURE_BYTES.length - 1];
+            int tailLen = 0;
+            int total = 0;
+
+            while (total < maxScan) {
+                int toRead = Math.min(buf.length, maxScan - total);
+                int read = is.read(buf, 0, toRead);
+                if (read <= 0) {
+                    break;
+                }
+                total += read;
+
+                if (containsSignature(tail, tailLen, buf, read)) {
+                    return true;
+                }
+
+                tailLen = Math.min(tail.length, read);
+                System.arraycopy(buf, read - tailLen, tail, 0, tailLen);
             }
-            return SIGNATURE_FS.equals(new String(header, "US-ASCII"));
+            return false;
         } catch (IOException ex) {
             return false;
         }
+    }
+    
+    private static boolean containsSignature(byte[] tail, int tailLen, byte[] buf, int bufLen) {
+        int sigLen = SIGNATURE_BYTES.length;
+        int scanLen = tailLen + bufLen;
+        if (scanLen < sigLen) {
+            return false;
+        }
+        for (int i = 0; i <= scanLen - sigLen; i++) {
+            boolean match = true;
+            for (int j = 0; j < sigLen; j++) {
+                byte b;
+                int idx = i + j;
+                if (idx < tailLen) {
+                    b = tail[idx];
+                } else {
+                    b = buf[idx - tailLen];
+                }
+                if (b != SIGNATURE_BYTES[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static void extract(Path file, Path outDir, Progress progress) throws IOException {
