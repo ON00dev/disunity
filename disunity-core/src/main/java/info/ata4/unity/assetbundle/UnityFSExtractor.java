@@ -35,6 +35,7 @@ public class UnityFSExtractor {
     private static final int COMPRESSION_LZ4HC = 3;
 
     private static final int BLOCK_FLAG_MASK = 0x3F;
+    private static final byte[] SIGNATURE_BYTES = new byte[]{'U', 'n', 'i', 't', 'y', 'F', 'S', 0};
 
     private UnityFSExtractor() {
     }
@@ -57,27 +58,44 @@ public class UnityFSExtractor {
     }
 
     public static void extract(Path file, Path outDir, Progress progress) throws IOException {
+        long fileSize = Files.size(file);
         try (DataReader in = DataReaders.forFile(file, READ)) {
+            long baseOffset = findUnityFSBaseOffset(in, fileSize);
+            in.position(baseOffset);
             UnityFSHeader header = readHeader(in);
-            long bundleSize = Files.size(file);
+            long bundleEnd = baseOffset + header.size;
+            int alignTo = alignment(header.version, header.flags);
 
-            long blocksInfoOffset;
-            long dataOffset;
-            if ((header.flags & FLAG_BLOCKS_INFO_AT_END) != 0) {
-                blocksInfoOffset = bundleSize - header.compressedBlocksInfoSize;
-                dataOffset = align(header.headerEndPosition, alignment(header.version, header.flags));
-            } else {
-                blocksInfoOffset = header.headerEndPosition;
-                dataOffset = blocksInfoOffset + header.compressedBlocksInfoSize;
-                dataOffset = align(dataOffset, alignment(header.version, header.flags));
+            long blocksInfoOffset = -1;
+            BlocksInfo blocksInfo = null;
+            List<Long> candidateOffsets = getBlocksInfoCandidateOffsets(header, bundleEnd, alignTo);
+            for (Long candidateOffset : candidateOffsets) {
+                if (candidateOffset < 0 || candidateOffset + header.compressedBlocksInfoSize > fileSize) {
+                    continue;
+                }
+                in.position(candidateOffset);
+                byte[] blocksInfoCompressed = new byte[(int) header.compressedBlocksInfoSize];
+                in.readBytes(blocksInfoCompressed);
+
+                byte[] blocksInfoData = tryDecompressBlocksInfo(blocksInfoCompressed, header);
+                if (blocksInfoData == null) {
+                    continue;
+                }
+
+                try {
+                    blocksInfo = readBlocksInfo(blocksInfoData);
+                    blocksInfoOffset = candidateOffset;
+                    break;
+                } catch (Exception ex) {
+                }
             }
 
-            in.position(blocksInfoOffset);
-            byte[] blocksInfoCompressed = new byte[(int) header.compressedBlocksInfoSize];
-            in.readBytes(blocksInfoCompressed);
-            byte[] blocksInfoData = decompress(blocksInfoCompressed, (int) header.uncompressedBlocksInfoSize, header.flags & COMPRESSION_MASK);
+            if (blocksInfo == null) {
+                throw new IOException("Failed to locate/decompress UnityFS BlocksInfo");
+            }
 
-            BlocksInfo blocksInfo = readBlocksInfo(blocksInfoData);
+            long dataOffset = findDataOffset(in, fileSize, blocksInfoOffset, header, blocksInfo, alignTo);
+
             List<byte[]> blockData = readAndDecompressBlocks(in, dataOffset, blocksInfo.blocks);
             progress.setLimit(blocksInfo.nodes.size());
 
@@ -97,23 +115,250 @@ public class UnityFSExtractor {
             }
         }
     }
+    
+    private static long findDataOffset(DataReader in, long fileSize, long blocksInfoOffset, UnityFSHeader header, BlocksInfo blocksInfo, int alignTo) throws IOException {
+        if ((header.flags & FLAG_BLOCKS_INFO_AT_END) != 0) {
+            return align(header.headerEndPosition, alignTo);
+        }
+        if (blocksInfo.blocks.isEmpty()) {
+            throw new IOException("UnityFS BlocksInfo has no storage blocks");
+        }
+        
+        BlockInfo first = blocksInfo.blocks.get(0);
+        long base = blocksInfoOffset + header.compressedBlocksInfoSize;
+        long aligned = align(base, alignTo);
+        
+        for (int i = 0; i < alignTo; i++) {
+            long candidate = aligned + i;
+            if (candidate < 0 || candidate + first.compressedSize > fileSize) {
+                continue;
+            }
+            
+            try {
+                in.position(candidate);
+                byte[] compressed = new byte[(int) first.compressedSize];
+                in.readBytes(compressed);
+                int compression = first.flags & BLOCK_FLAG_MASK;
+                byte[] out = decompress(compressed, (int) first.uncompressedSize, compression);
+                if (out.length == (int) first.uncompressedSize) {
+                    return candidate;
+                }
+            } catch (Exception ex) {
+            }
+        }
+        
+        for (int i = 0; i < alignTo; i++) {
+            long candidate = base + i;
+            if (candidate < 0 || candidate + first.compressedSize > fileSize) {
+                continue;
+            }
+            
+            try {
+                in.position(candidate);
+                byte[] compressed = new byte[(int) first.compressedSize];
+                in.readBytes(compressed);
+                int compression = first.flags & BLOCK_FLAG_MASK;
+                byte[] out = decompress(compressed, (int) first.uncompressedSize, compression);
+                if (out.length == (int) first.uncompressedSize) {
+                    return candidate;
+                }
+            } catch (Exception ex) {
+            }
+        }
+        
+        throw new IOException("Failed to locate UnityFS data offset");
+    }
+    
+    private static List<Long> getBlocksInfoCandidateOffsets(UnityFSHeader header, long bundleEnd, int alignTo) {
+        List<Long> offsets = new ArrayList<Long>();
+        if ((header.flags & FLAG_BLOCKS_INFO_AT_END) != 0) {
+            offsets.add(bundleEnd - header.compressedBlocksInfoSize);
+            offsets.add(align(bundleEnd - header.compressedBlocksInfoSize, alignTo));
+        } else {
+            long start = header.headerEndPosition;
+            for (int i = 0; i < alignTo; i++) {
+                offsets.add(start + i);
+            }
+        }
+        return offsets;
+    }
+    
+    private static byte[] tryDecompressBlocksInfo(byte[] data, UnityFSHeader header) {
+        int compression = header.flags & COMPRESSION_MASK;
+        int[] candidates;
+        if (compression == COMPRESSION_LZMA) {
+            candidates = new int[]{COMPRESSION_LZMA, COMPRESSION_LZ4, COMPRESSION_LZ4HC, COMPRESSION_NONE};
+        } else if (compression == COMPRESSION_LZ4 || compression == COMPRESSION_LZ4HC) {
+            candidates = new int[]{COMPRESSION_LZ4, COMPRESSION_LZ4HC, COMPRESSION_LZMA, COMPRESSION_NONE};
+        } else {
+            candidates = new int[]{COMPRESSION_NONE, COMPRESSION_LZ4, COMPRESSION_LZ4HC, COMPRESSION_LZMA};
+        }
+
+        for (int c : candidates) {
+            try {
+                byte[] out = decompress(data, (int) header.uncompressedBlocksInfoSize, c);
+                if (out.length == (int) header.uncompressedBlocksInfoSize) {
+                    return out;
+                }
+            } catch (Exception ex) {
+            }
+        }
+
+        return null;
+    }
 
     private static UnityFSHeader readHeader(DataReader in) throws IOException {
-        String signature = in.readStringNull();
-        if (!SIGNATURE_FS.equals(signature)) {
+        long start = in.position();
+        byte[] sig = new byte[8];
+        in.readBytes(sig);
+        if (!matchesUnityFSSignature(sig)) {
             throw new AssetBundleException("Invalid signature");
+        }
+        if (sig[7] != 0) {
+            in.position(start + 7);
         }
 
         UnityFSHeader header = new UnityFSHeader();
         header.version = in.readInt();
-        header.unityVersion = in.readStringNull();
-        header.unityRevision = in.readStringNull();
+        header.unityVersion = readNullTerminatedString(in, 256);
+        header.unityRevision = readNullTerminatedString(in, 256);
         header.size = in.readLong();
         header.compressedBlocksInfoSize = in.readUnsignedInt();
         header.uncompressedBlocksInfoSize = in.readUnsignedInt();
         header.flags = in.readInt();
         header.headerEndPosition = in.position();
         return header;
+    }
+    
+    private static boolean matchesUnityFSSignature(byte[] sig) {
+        if (sig.length < 7) {
+            return false;
+        }
+        for (int i = 0; i < 7; i++) {
+            if (sig[i] != SIGNATURE_BYTES[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    private static String readNullTerminatedString(DataReader in, int maxLen) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        for (int i = 0; i < maxLen; i++) {
+            int b = in.readUnsignedByte();
+            if (b == 0) {
+                return new String(bos.toByteArray(), "UTF-8");
+            }
+            bos.write(b);
+        }
+        throw new IOException("Invalid UnityFS string");
+    }
+    
+    private static long findUnityFSBaseOffset(DataReader in, long fileSize) throws IOException {
+        long originalPos = in.position();
+        try {
+            long bestOffset = 0;
+            long bestDelta = Long.MAX_VALUE;
+            
+            List<Long> candidates = findSignatureOffsets(in, fileSize);
+            for (Long offset : candidates) {
+                UnityFSHeader header = tryReadHeaderAt(in, offset);
+                if (header == null) {
+                    continue;
+                }
+                long end = offset + header.size;
+                long delta = Math.abs(fileSize - end);
+                if (delta < bestDelta) {
+                    bestDelta = delta;
+                    bestOffset = offset;
+                }
+                if (delta == 0) {
+                    break;
+                }
+            }
+            
+            return bestOffset;
+        } finally {
+            in.position(originalPos);
+        }
+    }
+    
+    private static UnityFSHeader tryReadHeaderAt(DataReader in, long offset) {
+        try {
+            in.position(offset);
+            UnityFSHeader header = readHeader(in);
+            if (header.version < 5 || header.version > 10) {
+                return null;
+            }
+            if (header.size <= 0) {
+                return null;
+            }
+            if (header.compressedBlocksInfoSize <= 0 || header.uncompressedBlocksInfoSize <= 0) {
+                return null;
+            }
+            if (header.compressedBlocksInfoSize > header.size) {
+                return null;
+            }
+            return header;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+    
+    private static List<Long> findSignatureOffsets(DataReader in, long fileSize) throws IOException {
+        long originalPos = in.position();
+        try {
+            List<Long> offsets = new ArrayList<Long>();
+            int chunkSize = 64 * 1024;
+            byte[] tail = new byte[7];
+            int tailLen = 0;
+            long pos = 0;
+            while (pos < fileSize) {
+                in.position(pos);
+                int toRead = (int) Math.min(chunkSize, fileSize - pos);
+                byte[] chunk = new byte[toRead];
+                in.readBytes(chunk);
+                
+                byte[] scan;
+                int scanOffset;
+                if (tailLen > 0) {
+                    scan = new byte[tailLen + chunk.length];
+                    System.arraycopy(tail, 0, scan, 0, tailLen);
+                    System.arraycopy(chunk, 0, scan, tailLen, chunk.length);
+                    scanOffset = (int) (pos - tailLen);
+                } else {
+                    scan = chunk;
+                    scanOffset = (int) pos;
+                }
+                
+                for (int i = 0; i <= scan.length - SIGNATURE_BYTES.length; i++) {
+                    boolean match = true;
+                    for (int j = 0; j < SIGNATURE_BYTES.length; j++) {
+                        if (scan[i + j] != SIGNATURE_BYTES[j]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        offsets.add((long) scanOffset + i);
+                    }
+                }
+                
+                tailLen = Math.min(tail.length, scan.length);
+                System.arraycopy(scan, scan.length - tailLen, tail, 0, tailLen);
+                pos += toRead;
+                
+                if (offsets.size() > 64) {
+                    break;
+                }
+            }
+            if (offsets.isEmpty()) {
+                offsets.add(0L);
+            }
+            return offsets;
+        } finally {
+            in.position(originalPos);
+        }
     }
 
     private static int alignment(int version, int flags) {
@@ -177,12 +422,20 @@ public class UnityFSExtractor {
     private static List<byte[]> readAndDecompressBlocks(DataReader in, long dataOffset, List<BlockInfo> blocks) throws IOException {
         List<byte[]> blockData = new ArrayList<byte[]>(blocks.size());
         long current = dataOffset;
-        for (BlockInfo block : blocks) {
+        for (int i = 0; i < blocks.size(); i++) {
+            BlockInfo block = blocks.get(i);
             in.position(current);
             byte[] compressed = new byte[(int) block.compressedSize];
             in.readBytes(compressed);
             int compression = block.flags & BLOCK_FLAG_MASK;
-            byte[] decompressed = decompress(compressed, (int) block.uncompressedSize, compression);
+            byte[] decompressed;
+            try {
+                decompressed = decompress(compressed, (int) block.uncompressedSize, compression);
+            } catch (Exception ex) {
+                throw new IOException("Failed to decompress UnityFS block " + i + " (compression=" + compression
+                        + ", compressedSize=" + block.compressedSize + ", uncompressedSize=" + block.uncompressedSize
+                        + ") at file offset " + current, ex);
+            }
             blockData.add(decompressed);
             current += block.compressedSize;
         }

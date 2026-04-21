@@ -13,6 +13,7 @@ A list of features and Unity versions that are currently supported by DisUnity.
 * 4.1
 * 4.2
 * 4.3
+* 5+
 
 ### Asset extraction
 
